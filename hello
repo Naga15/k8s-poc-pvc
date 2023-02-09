@@ -1,0 +1,60 @@
+# app.py
+from flask import Flask
+import datetime
+
+app = Flask(__name__)
+
+@app.route('/')
+def write_date():
+    with open('/app/date.txt', 'a') as f:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"{now}\n")
+    return "Date written to file."
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0')
+
+	
+	
+
+	
+	# Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY app.py .
+
+RUN pip install flask
+
+CMD ["python", "app.py"]
+
+
+docker build -t date-app .
+docker run -d -p 5000:5000 date-app
+
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: date-app-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: date-app
+  template:
+    metadata:
+      labels:
+        app: date-app
+    spec:
+      containers:
+      - name: date-app
+        image: date-app
+        ports:
+        - containerPort: 5000
+
+kubectl apply -f deployment.yaml
+
+kubectl logs -f <pod-name>
