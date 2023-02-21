@@ -1,0 +1,33 @@
+jobs:
+- name: push-files
+  plan:
+  - get: destination-repo
+    trigger: true
+  - task: loop
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          repository: ubuntu
+      inputs:
+        - name: destination-repo
+      outputs:
+        - name: temp
+      run:
+        path: sh
+        args:
+          - -exc
+          - |
+            for cluster in $(cat cluster_names.txt); do
+              echo "Pushing files from $cluster to destination repo"
+              git clone https://github.com/<user>/$cluster.git
+              cd $cluster
+              git remote add temp ../temp
+              git push temp HEAD:refs/heads/master
+              cd ..
+              rm -rf $cluster
+            done
+  - put: destination-repo
+    params:
+      repository: temp
