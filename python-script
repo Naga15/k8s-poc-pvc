@@ -1,0 +1,20 @@
+import os
+from datetime import datetime, timezone, timedelta
+
+FILE_PATH = "/data/date.txt"
+
+if not os.path.exists(FILE_PATH):
+    with open(FILE_PATH, "w") as f:
+        f.write("")
+
+def write_date():
+    with open(FILE_PATH, "r+") as f:
+        content = f.read()
+        today = datetime.now(timezone(timedelta(hours=-8)))  # PST timezone
+        date_str = today.strftime("%Y-%m-%d")
+        if date_str not in content:
+            f.write(date_str + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+write_date()
