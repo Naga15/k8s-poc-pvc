@@ -18,3 +18,13 @@ def write_date():
             os.fsync(f.fileno())
 
 write_date()
+
+
+FROM python:3.8-alpine
+
+WORKDIR /app
+
+COPY requirements.txt .
+COPY app.py .
+CMD ["python", "app.py"]
+
