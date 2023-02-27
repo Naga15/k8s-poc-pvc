@@ -1,18 +1,36 @@
-# app.py
 from flask import Flask
-import datetime
+import pytz
+from datetime import datetime, timezone
+import os
 
 app = Flask(__name__)
 
+# Set the timezone to PST
+timezone = pytz.timezone('America/Los_Angeles')
+
+# Initialize the last_date variable to None
+last_date = None
+
 @app.route('/')
-def write_date():
-    with open('/app/date.txt', 'a') as f:
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"{now}\n")
-    return "Date written to file."
+def display_date():
+    global last_date
+    
+    # Get the current date and time in the PST timezone
+    current_date = datetime.now(timezone).strftime("%Y-%m-%d")
+
+    # Check if the current date is the same as the last_date variable
+    if last_date != current_date:
+        # If it's a new day, update the last_date variable and display the new date
+        last_date = current_date
+        return f"The current date in PST is: {current_date}"
+    else:
+        # If it's the same day, just display the previously saved date
+        return f"The last saved date in PST is: {last_date}"
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0')
+    # Set the port to 5000
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
 
 	
 	
