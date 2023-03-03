@@ -1,0 +1,67 @@
+const fs = require('fs')
+
+const loadJSON = function (filename) {
+  const buff = fs.readFileSync(filename)
+  return JSON.parse(buff.toString())
+}
+
+// Load clusterroles
+const dangerVerbs = ['create', 'update', 'patch', 'delete', '*']
+const clusterRoles = loadJSON(process.argv[2])
+const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => r.verbs.includes('*')))
+
+console.log(`Found ${clusterAdminRoles.length} cluster admin roles`)
+
+// Load clusterRoleBindings
+const clusterRoleBindings = loadJSON(process.argv[3])
+
+// Check each clusterRolebinding subject is in the danger zone
+const dangerCRBs = clusterRoleBindings.filter(crb => {
+  if (crb.roleRef && crb.roleRef.name) {
+    const roleName = crb.roleRef.name
+    const cr = clusterRoles.find(c => c.metadata.name === roleName)
+    if (cr && cr.rules) {
+      const dangerRules = cr.rules.filter(r => {
+        if (r.verbs && r.resources) {
+          return r.verbs.some(v => dangerVerbs.includes(v)) && !r.resources.includes('namespaces')
+        } else if (r.verbs) {
+          return r.verbs.some(v => dangerVerbs.includes(v))
+        } else {
+          return false
+        }
+      })
+      return dangerRules.length > 0
+    }
+  }
+  return false
+})
+
+const soxSubjectCRs = {}
+dangerCRBs.filter(crb => crb.subjects).forEach(crb => {
+  crb.subjects.forEach(subj => {
+    const subjKey = `${subj.kind}/${subj.name}/${subj.namespace}`
+    if (!soxSubjectCRs[subjKey]) {
+      soxSubjectCRs[subjKey] = []
+    }
+    soxSubjectCRs[subjKey].push(crb.roleRef.name)
+  })
+})
+
+const soxSubjects = []
+for (key in soxSubjectCRs) {
+  const sub = key.split('/')
+  soxSubjects.push({
+    name: sub[1],
+    kind: sub[0],
+    namespace: sub[2],
+    clusterRoles: soxSubjectCRs[key]
+  })
+}
+
+console.log(`Found ${soxSubjects.length} SOX subjects`)
+
+// Write the results to a CSV file
+const csvData = soxSubjects.map(s => `"${s.name}","${s.kind}","${s.namespace}","${s.clusterRoles.join(',')}"`).join('\n')
+fs.writeFileSync(`${process.argv[4]}-cluster-admin-permissions.csv`, csvData)
+
+console.log(`Results written to ${process.argv[4]}-cluster-admin-permissions.csv`)
