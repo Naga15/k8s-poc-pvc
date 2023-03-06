@@ -11,6 +11,23 @@ const clusterRoles = loadJSON(process.argv[2])
 const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => r.verbs.includes('*') && ['pods', 'clusterrolebindings'].includes(r.resources)))
 const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => r.verbs.includes('*') && ['pods', 'clusterrolebindings'].includes(r.resources) && !r.verbs.includes('get') && !r.verbs.includes('list') && !r.verbs.includes('watch')))
 
+const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => {
+  return (
+    r.resources.includes('pods') ||
+    r.resources.includes('clusterrolebindings')
+  ) && (
+    r.verbs.includes('*') || 
+    r.verbs.includes('create') || 
+    r.verbs.includes('update') || 
+    r.verbs.includes('patch') || 
+    r.verbs.includes('delete')
+  ) && (
+    !r.resources.includes('namespaces') ||
+    r.resources.includes('pods') ||
+    r.resources.includes('clusterrolebindings')
+  );
+}));
+
 
 console.log(`Found ${clusterAdminRoles.length} cluster admin roles`)
 
