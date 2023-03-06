@@ -1,0 +1,74 @@
+const fs = require('fs')
+
+const loadJson = function (filename) {
+  const buff = fs.readFileSync(filename)
+  return JSON.parse(buff.toString())
+}
+
+// Load cluster roles
+const clusterRoles = loadJson(process.argv[2])
+const dangerVerbs = ['create', 'update', 'patch', 'delete', '*']
+const dangerClusterRoles = clusterRoles.filter((cr) => {
+  return cr.rules.some((r) => {
+    return r.verbs.some((v) => {
+      return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+    }) && ['pods', 'clusterrolebindings'].some((res) => {
+      return r.resources.includes(res)
+    })
+  })
+})
+
+console.log(`Found ${dangerClusterRoles.length} danger cluster roles`)
+
+// Load cluster role bindings
+const clusterRoleBindings = loadJson(process.argv[3])
+
+// Filter for subjects that are not namespace-scoped and have danger cluster roles
+const dangerSubjects = clusterRoleBindings.filter((crb) => {
+  return crb.subjects.some((subj) => {
+    return subj.kind === 'User' || (subj.kind === 'ServiceAccount' && !subj.namespace)
+  }) && dangerClusterRoles.some((cr) => {
+    return cr.metadata.name === crb.roleRef.name
+  })
+}).map((crb) => {
+  const subj = crb.subjects.find((subj) => {
+    return subj.kind === 'User' || (subj.kind === 'ServiceAccount' && !subj.namespace)
+  })
+  const cr = dangerClusterRoles.find((cr) => {
+    return cr.metadata.name === crb.roleRef.name
+  })
+  const verbs = cr.rules.filter((r) => {
+    return r.verbs.some((v) => {
+      return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+    })
+  }).map((r) => {
+    return r.verbs.join(',')
+  }).join(';')
+  return {
+    name: subj.name,
+    kind: subj.kind,
+    namespace: subj.namespace || 'cluster-scoped',
+    clusterRole: cr.metadata.name,
+    podsVerbs: cr.rules.filter((r) => {
+      return r.resources.includes('pods') && r.verbs.some((v) => {
+        return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+      })
+    }).map((r) => {
+      return r.verbs.join(',')
+    }).join(','),
+    crbVerbs: cr.rules.filter((r) => {
+      return r.resources.includes('clusterrolebindings') && r.verbs.some((v) => {
+        return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+      })
+    }).map((r) => {
+      return r.verbs.join(',')
+    }).join(',')
+  }
+})
+
+console.log(`Found ${dangerSubjects.length} danger subjects`)
+
+// Write the results to CSV and JSON files
+const csvData = dangerSubjects.map((subj) => {
+  return `"${subj.name}","${subj.kind}","${subj.namespace}","${subj.clusterRole}","${subj.podsVerbs}","${subj.crbVerbs}"`
+}).join('\n
