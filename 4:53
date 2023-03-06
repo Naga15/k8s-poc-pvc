@@ -1,0 +1,85 @@
+const fs = require('fs')
+
+const loadJson = function (filename) {
+  const buff = fs.readFileSync(filename)
+  return JSON.parse(buff.toString())
+}
+
+// Load cluster roles
+const dangerVerbs = ['create', 'update', 'patch', 'delete', '*']
+const clusterRoles = loadJson(process.argv[2])
+const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => {
+  return (r.resources.includes('pods') && dangerVerbs.some(v => r.verbs.includes(v))) ||
+         (r.resources.includes('clusterrolebindings') && dangerVerbs.some(v => r.verbs.includes(v)))
+}))
+
+console.log(`Found ${clusterAdminRoles.length} cluster admin roles`)
+
+// Load clusterRoleBindings
+const clusterRoleBindings = loadJson(process.argv[3])
+
+// Check each clusterRolebinding subject is in the danger zone
+const dangerCRBs = clusterRoleBindings.filter(crb => {
+  if (crb.roleRef && crb.roleRef.name) {
+    const roleName = crb.roleRef.name
+    const cr = clusterRoles.find(c => c.metadata.name === roleName)
+    if (cr && cr.rules) {
+      const dangerRules = cr.rules.filter(r => {
+        if (r.resources) {
+          if (r.resources.includes('pods') && dangerVerbs.some(v => r.verbs.includes(v))) {
+            return true
+          } else if (r.resources.includes('clusterrolebindings') && dangerVerbs.some(v => r.verbs.includes(v))) {
+            return true
+          } else {
+            return false
+          }
+        } else {
+          return false
+        }
+      })
+      return dangerRules.length > 0
+    }
+  }
+  return false
+})
+
+const soxSubjectCRs = {}
+dangerCRBs.filter(crb => crb.subjects).forEach(crb => {
+  crb.subjects.forEach(subj => {
+    const subjKey = `${subj.kind}/${subj.name}/${subj.namespace || 'cluster-scoped'}`
+    if (!soxSubjectCRs[subjKey]) {
+      soxSubjectCRs[subjKey] = []
+    }
+    soxSubjectCRs[subjKey].push(crb.roleRef.name)
+  })
+})
+
+const soxSubjects = []
+for (key in soxSubjectCRs) {
+  const sub = key.split('/')
+  soxSubjects.push({
+    name: sub[1],
+    kind: sub[0],
+    namespace: sub[2] || 'cluster-scoped',
+    clusterRoles: soxSubjectCRs[key]
+  })
+}
+
+console.log(`Found ${soxSubjects.length} SOX subjects`)
+
+// Write the results to a CSV file
+let csvData = 'Name,Kind,Namespace,Cluster Roles,Resources/Pods:Verbs,Resources/ClusterRoleBindings:Verbs\n'
+soxSubjects.forEach(s => {
+  let podsVerbs = ''
+  let crbVerbs = ''
+  clusterAdminRoles.forEach(role => {
+    const podsRule = role.rules.find(r => r.resources.includes('pods'))
+    const crbRule = role.rules.find(r => r.resources.includes('clusterrolebindings'))
+    if (podsRule) {
+      podsVerbs = podsRule.verbs.filter(v => !['get', 'list', 'watch'].includes(v)).join(',')
+    }
+    if (crbRule) {
+      crbVerbs = crbRule.verbs.filter(v => !['get', 'list', 'watch'].includes(v)).join(',')
+    }
+  })
+ 
