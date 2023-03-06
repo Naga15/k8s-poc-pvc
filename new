@@ -1,0 +1,81 @@
+const fs = require('fs')
+const loadJson = function (filename) {
+  const buff = fs.readFileSync(filename)
+  return JSON.parse(buff.toString())
+}
+
+// Load cluster roles
+const clusterRoles = [loadJson(process.argv[2])]
+
+// Filter for cluster roles with cluster-admin permissions
+const clusterAdminRoles = clusterRoles.filter((cr) => {
+  return cr.rules.some((r) => {
+    return r.apiGroups.includes("") && r.resources.includes("pods") && r.verbs.includes("*") ||
+           r.apiGroups.includes("rbac.authorization.k8s.io") && r.resources.includes("clusterrolebindings") && r.verbs.includes("*") && !r.resourceNames;
+  })
+})
+
+console.log(`Found ${clusterAdminRoles.length} cluster-admin roles`)
+
+// Load cluster role bindings
+const clusterRoleBindings = loadJson(process.argv[3])
+
+// Filter for subjects that are not namespace-scoped and have cluster-admin roles
+const clusterAdminSubjects = clusterRoleBindings.filter((crb) => {
+  return crb.subjects.some((subj) => {
+    return subj.kind === "User" || subj.kind === "ServiceAccount" && subj.namespace === undefined
+  }) && clusterAdminRoles.some((role) => {
+    return role.metadata.name === crb.roleRef.name
+  })
+})
+
+console.log(`Found ${clusterAdminSubjects.length} cluster-admin subjects`)
+
+// Build array of objects with subject name, kind, namespace, and cluster role names
+const subjects = []
+clusterAdminSubjects.forEach((crb) => {
+  crb.subjects.forEach((subj) => {
+    if (subj.kind === "User" || subj.kind === "ServiceAccount" && subj.namespace === undefined) {
+      const subjKey = `${subj.kind}/${subj.name}/${subj.namespace || "cluster-scoped"}`
+      let subjectObj = subjects.find((subjObj) => {
+        return subjObj.key === subjKey
+      })
+      if (!subjectObj) {
+        subjectObj = {
+          key: subjKey,
+          name: subj.name,
+          kind: subj.kind,
+          namespace: subj.namespace || "cluster-scoped",
+          clusterRoles: []
+        }
+        subjects.push(subjectObj)
+      }
+      if (!subjectObj.clusterRoles.includes(crb.roleRef.name)) {
+        subjectObj.clusterRoles.push(crb.roleRef.name)
+      }
+    }
+  })
+})
+
+console.log(`Found ${subjects.length} cluster-admin subjects`)
+
+// Write subjects to CSV file
+const csv = "Name,Kind,Namespace,ClusterRoles,Verbs\n"
+subjects.forEach((subj) => {
+  const clusterRolesStr = subj.clusterRoles.join(";")
+  const podsVerbs = clusterAdminRoles.find((role) => {
+    return role.rules.some((r) => {
+      return r.apiGroups.includes("") && r.resources.includes("pods")
+    })
+  }).rules.find((r) => {
+    return r.apiGroups.includes("") && r.resources.includes("pods")
+  }).verbs.join(",")
+  const crbVerbs = clusterAdminRoles.find((role) => {
+    return role.rules.some((r) => {
+      return r.apiGroups.includes("rbac.authorization.k8s.io") && r.resources.includes("clusterrolebindings")
+    })
+  }).rules.find((r) => {
+    return r.apiGroups.includes("rbac.authorization.k8s.io") && r.resources.includes("clusterrolebindings")
+  }).verbs.join(",")
+  const verbsStr = `Pods: ${podsVerbs}\nClusterRoleBindings: ${crbVerbs}`
+  const row = `${subj.name},${subj.kind
