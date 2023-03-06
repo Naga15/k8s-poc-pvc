@@ -79,3 +79,26 @@ subjects.forEach((subj) => {
   }).verbs.join(",")
   const verbsStr = `Pods: ${podsVerbs}\nClusterRoleBindings: ${crbVerbs}`
   const row = `${subj.name},${subj.kind
+  
+  
+  #!/bin/bash
+
+# get clusterroles with cluster-admin permissions
+kubectl get clusterroles -o json | jq '.items[] | select(.rules[].apiGroups[] == "" and .rules[].resources[] == "*" and .rules[].verbs[] == "*") | .metadata.name' -r > clusterroles.txt
+
+# get clusterrolebindings with subjects that are not namespace-scoped
+kubectl get clusterrolebindings -o json | jq '.items[] | select(.subjects[].kind == "User" or .subjects[].kind == "Group" or .subjects[].kind == "ServiceAccount" and .subjects[].namespace == null) | .metadata.name' -r > clusterrolebindings.txt
+
+# iterate through clusterroles and clusterrolebindings to generate output
+echo "ClusterRoleBinding, Subject, Kind, Namespace, Resource, Verbs" > output.csv
+while read -r role; do
+  kubectl get clusterrolebindings -o json | jq --arg role "$role" '.items[] | select(.roleRef.name == $role) | .metadata.name' -r |
+  while read -r binding; do
+    kubectl get clusterrolebindings "$binding" -o json | jq --arg binding "$binding" '.subjects[] | select(.kind == "User" or .kind == "Group" or .kind == "ServiceAccount" and .namespace == null) | [$binding, .name, .kind, .namespace, "pods", (.apiGroup // ""), .resource, .verbs] | @csv' -r >> output.csv
+    kubectl get clusterrolebindings "$binding" -o json | jq --arg binding "$binding" '.subjects[] | select(.kind == "User" or .kind == "Group" or .kind == "ServiceAccount" and .namespace == null) | [$binding, .name, .kind, .namespace, "clusterrolebindings", (.apiGroup // ""), .resource, .verbs] | @csv' -r >> output.csv
+  done
+done < clusterroles.txt
+
+# replace any "undefined" values with "cluster-scoped"
+sed -i 's/undefined/cluster-scoped/g' output.csv
+
