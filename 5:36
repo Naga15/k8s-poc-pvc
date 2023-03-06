@@ -72,3 +72,14 @@ console.log(`Found ${dangerSubjects.length} danger subjects`)
 const csvData = dangerSubjects.map((subj) => {
   return `"${subj.name}","${subj.kind}","${subj.namespace}","${subj.clusterRole}","${subj.podsVerbs}","${subj.crbVerbs}"`
 }).join('\n
+
+const csvData = dangerSubjects.map((subj) => {
+  return `"${subj.name}","${subj.kind}","${subj.namespace}","${subj.clusterRole}","pods:${subj.podsVerbs}","clusterrolebindings:${subj.crbVerbs}"`
+}).join('\n')
+fs.writeFileSync(`${process.argv[4]}.csv`, csvData)
+console.log(`Results written to ${process.argv[4]}.csv`)
+
+const jsonData = JSON.stringify(dangerSubjects, null, 2)
+fs.writeFileSync(`${process.argv[4]}.json`, jsonData)
+console.log(`Results written to ${process.argv[4]}.json`)
+
