@@ -9,6 +9,8 @@ const loadJSON = function (filename) {
 const dangerVerbs = ['create', 'update', 'patch', 'delete', '*']
 const clusterRoles = loadJSON(process.argv[2])
 const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => r.verbs.includes('*') && ['pods', 'clusterrolebindings'].includes(r.resources)))
+const clusterAdminRoles = clusterRoles.filter(cr => cr.rules.some(r => r.verbs.includes('*') && ['pods', 'clusterrolebindings'].includes(r.resources) && !r.verbs.includes('get') && !r.verbs.includes('list') && !r.verbs.includes('watch')))
+
 
 console.log(`Found ${clusterAdminRoles.length} cluster admin roles`)
 
