@@ -1,0 +1,108 @@
+const fs = require('fs')
+
+const loadJson = function (filename) {
+  const buff = fs.readFileSync(filename)
+  return JSON.parse(buff.toString())
+}
+
+// Load cluster roles
+const clusterRoles = loadJson(process.argv[2])
+const dangerVerbs = ['create', 'update', 'patch', 'delete', '*']
+const dangerClusterRoles = clusterRoles.filter((cr) => {
+  return cr.rules.some((r) => {
+    return r.verbs.some((v) => {
+      return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+    }) && ['pods', 'clusterrolebindings'].some((res) => {
+      return r.resources.includes(res)
+    })
+  })
+})
+
+console.log(`Found ${dangerClusterRoles.length} danger cluster roles`)
+
+// Load cluster role bindings
+const clusterRoleBindings = loadJson(process.argv[3])
+
+// Filter for subjects that are not namespace-scoped and have danger cluster roles
+const dangerSubjects = clusterRoleBindings.filter((crb) => {
+  return crb.subjects.some((subj) => {
+    return subj.kind === 'User' || (subj.kind === 'ServiceAccount' && !subj.namespace)
+  }) && dangerClusterRoles.some((cr) => {
+    return cr.metadata.name === crb.roleRef.name
+  })
+}).map((crb) => {
+  const subj = crb.subjects.find((subj) => {
+    return subj.kind === 'User' || (subj.kind === 'ServiceAccount' && !subj.namespace)
+  })
+  const cr = dangerClusterRoles.find((cr) => {
+    return cr.metadata.name === crb.roleRef.name
+  })
+  const verbs = cr.rules.filter((r) => {
+    return r.verbs.some((v) => {
+      return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+    })
+  }).map((r) => {
+    return r.verbs.join(',')
+  }).join(';')
+  return {
+    name: subj.name,
+    kind: subj.kind,
+    namespace: subj.namespace || 'cluster-scoped',
+    clusterRole: cr.metadata.name,
+    podsVerbs: cr.rules.filter((r) => {
+      return r.resources.includes('pods') && r.verbs.some((v) => {
+        return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+      })
+    }).map((r) => {
+      return r.verbs.join(',')
+    }).join(','),
+    crbVerbs: cr.rules.filter((r) => {
+      return r.resources.includes('clusterrolebindings') && r.verbs.some((v) => {
+        return dangerVerbs.includes(v) && !['get', 'list', 'watch'].includes(v)
+      })
+    }).map((r) => {
+      return r.verbs.join(',')
+    }).join(',')
+  }
+})
+
+console.log(`Found ${dangerSubjects.length} danger subjects`)
+
+// Write the results to CSV and JSON files
+const csvData = dangerSubjects.map((subj) => {
+  return `"${subj.name}","${subj.kind}","${subj.namespace}","${subj.clusterRole}","${subj.podsVerbs}","${subj.crbVerbs}"`
+}).join('\n')
+fs.writeFileSync(`${process.argv[4]}.csv`, csvData)
+console.log(`Results written to ${process.argv[4]}.csv`)
+
+const jsonData = JSON.stringify(dangerSubjects, null, 2)
+fs.writeFileSync(`${process.argv[4]}.json`, jsonData)
+
+
+#!/bin/bash
+
+# Ensure the script is being run with the correct number of arguments
+if [[ $# -ne 4 ]]; then
+  echo "Usage: ./check_dangerous_permissions.sh <context> <clusterRolesFile> <clusterRoleBindingsFile> <outputFilePrefix>"
+  exit 1
+fi
+
+# Set context
+kubectl config use-context "$1"
+
+# Check dangerous permissions in cluster roles
+dangerClusterRoles=$(kubectl get clusterroles -o json | jq -r '.items[] | select(.rules[].verbs[] | contains("create", "update", "patch", "delete", "*") and (.rules[].resources[] | contains("pods", "clusterrolebindings")) and (.rules[].verbs[] | contains("get", "list", "watch") | not)).metadata.name')
+
+echo "Found ${dangerClusterRoles[*]@Q} dangerous cluster roles"
+
+# Check dangerous permissions in cluster role bindings
+dangerSubjects=$(kubectl get clusterrolebindings -o json | jq -r --arg dangerClusterRoles "${dangerClusterRoles[*]}" '.items[] | select((.subjects[].kind == "User" or (.subjects[].kind == "ServiceAccount" and (.subjects[].namespace | not))) and (.roleRef.name | IN($dangerClusterRoles | split(" "))) ).subjects[] | "\(.name),\(.kind),\(.namespace // "cluster-scoped"),\(.roleRef.name),\(.roleRef.kind),\(.roleRef.apiGroup),\(.roleRef.resource),\(.roleRef.subresource),\(.roleRef.name),\(.roleRef.namespace)"')
+
+echo "Found ${dangerSubjects[*]@Q} danger subjects"
+
+# Write results to CSV and JSON files
+echo "${dangerSubjects[*]}" | tr ' ' '\n' | sed 's/\"//g' | awk 'BEGIN { OFS="," } { print }' > "$4.csv"
+echo "Results written to $4.csv"
+
+echo "${dangerSubjects[*]}" | tr ' ' '\n' | jq -R 'split(",") | {name: .[0], kind: .[1], namespace: .[2], roleRefName: .[3], roleRefKind: .[4], roleRefAPIGroup: .[5], resource: .[6], subresource: .[7], resourceName: .[8], resourceNamespace: .[9], pods: "none", clusterRoleBindings: "none"}' | jq -s '.' > "$4.json"
+echo "Results written to $4.json"
