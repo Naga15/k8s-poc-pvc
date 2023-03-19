@@ -1,0 +1,19 @@
+#!/bin/bash
+
+context_name=$(kubectl config current-context)
+
+CLUSTER_NAME="cluster1"
+
+#clustername=$CLUSTER_NAME
+
+if [ -z "$CLUSTER_NAME" ]; then
+  echo "Error: CLUSTER_NAME environment variable is not set."
+  exit 1
+fi
+
+kubectl config use-context "$context_name"
+kubectl get clusterroles -o json | jq '.items' > "${context_name}-clusterroles.json"
+kubectl get clusterrolebindings -o json | jq '.items' > "${context_name}-clusterrolebindings.json"
+
+# Call the Node.js script with the environment variable
+node pri.js "${context_name}-clusterroles.json" "${context_name}-clusterrolebindings.json" "$context_name" "$CLUSTER_NAME"
