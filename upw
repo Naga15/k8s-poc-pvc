@@ -1,0 +1,147 @@
+const fs = require('fs');
+
+const loadJSON = function (filename) {
+  const buff = fs.readFileSync(filename);
+  return JSON.parse(buff.toString());
+};
+
+// Load clusterroles
+const dangerVerbs = ['create', 'update', 'patch', 'delete', 'deletecollection'];
+const viewVerbs = ['get', 'list', 'watch'];
+const clusterRoles = loadJSON(process.argv[2]);
+
+// Load clusterRoleBindings
+const clusterRoleBindings = loadJSON(process.argv[3]);
+
+const clustername = process.argv[5];
+
+const soxSubjectCRs = {};
+clusterRoleBindings.forEach((crb) => {
+  if (crb.roleRef && crb.roleRef.name) {
+    const roleName = crb.roleRef.name;
+    const cr = clusterRoles.find((c) => c.metadata.name === roleName);
+
+    if (cr && cr.rules) {
+      const dangerRules = cr.rules.filter((r) => {
+        if (r.verbs && r.resources) {
+          const hasDangerVerbs = r.verbs.some((v) => dangerVerbs.includes(v));
+          const hasDangerResources =
+            r.resources.includes('pods') ||
+            r.resources.includes('pods/exec') ||
+            r.resources.includes('clusterrolebindings');
+          const isWildcard = r.verbs.includes('*') && r.resources.includes('*');
+          return (hasDangerVerbs && hasDangerResources) || isWildcard;
+        } else {
+          return false;
+        }
+      });
+
+      const onlyViewRules = cr.rules.every((r) => {
+        if (r.verbs && r.resources) {
+          return (
+            r.verbs.every((v) => viewVerbs.includes(v)) &&
+            (r.resources.includes('pods') ||
+              r.resources.includes('pods/exec') ||
+              r.resources.includes('clusterrolebindings'))
+          );
+        } else {
+          return false;
+        }
+      });
+
+      if (
+        (dangerRules.length > 0 || roleName === 'cluster-admin') &&
+        !onlyViewRules
+      ) {
+        if (crb.subjects) {
+          crb.subjects.forEach((subj) => {
+            const subjKey = `${subj.kind}/${subj.name}/${subj.namespace}`;
+            if (!soxSubjectCRs[subjKey]) {
+              soxSubjectCRs[subjKey] = [];
+            }
+            soxSubjectCRs[subjKey].push(crb.roleRef.name);
+          });
+        }
+      }
+    }
+  }
+});
+
+const soxSubjects = [];
+for (key in soxSubjectCRs) {
+  const sub = key.split('/');
+  const clusterRoleNames = soxSubjectCRs[key];
+
+  clusterRoleNames.forEach((clusterRoleName) => {
+    const cr = clusterRoles.find((role) => role.metadata.name === clusterRoleName);
+
+    const podsVerbs = new Set();
+    const podsExecVerbs = new Set();
+    const crbVerbs = new Set();
+    let isWildcard = false;
+
+    cr.rules.forEach((r) => {
+      if (r.resources && r.verbs) {
+        r.resources.forEach((res) => {
+          r.verbs.forEach((v) => {
+            if (res === '*' && v === '*') {
+              isWildcard = true;
+            }
+
+            const isDangerVerb = dangerVerbs.includes(v);
+
+            if (isDangerVerb) {
+              if (res === 'pods' && res !== 'pods/exec') {
+                podsVerbs.add(v);
+              } else if (res === 'pods/exec') {
+                podsExecVerbs.add(v);
+              } else if (res === 'clusterrolebindings') {
+                crbVerbs.add(v);
+              }
+            }
+          });
+        });
+      }
+    });
+
+    if (isWildcard || clusterRoleName === 'cluster-admin') {
+      podsVerbs.clear();
+      podsExecVerbs.clear();
+      crbVerbs.clear();
+      podsVerbs.add('*');
+      podsExecVerbs.add('*');
+      crbVerbs.add('*');
+    }
+
+    const namespace =
+      sub[2] !== 'undefined' || clusterRoleName !== 'cluster-admin'
+        ? sub[2]
+        : 'cluster-scoped';
+
+    soxSubjects.push({
+      name: sub[1],
+      kind: sub[0],
+      namespace: namespace,
+      clusterRole: clusterRoleName,
+      podsVerbs: Array.from(podsVerbs).join(','),
+      'pods/execVerbs': Array.from(podsExecVerbs).join(','),
+      clusterrolebindingsVerbs: Array.from(crbVerbs).join(','),
+    });
+  });
+}
+
+console.log(`Found ${soxSubjects.length} SOX subjects`);
+
+// Write the results to a CSV file
+const csvData =
+  `clustername,name,kind,namespace,clusterRole,podsVerbs,pods/execVerbs,clusterrolebindingsVerbs\n` +
+  soxSubjects
+    .map(
+      (s) =>
+        `"${clustername}","${s.name}","${s.kind}","${s.namespace}","${s.clusterRole}","${s.podsVerbs}","${s['pods/execVerbs']}","${s.clusterrolebindingsVerbs}"`,
+    )
+    .join('\n');
+
+fs.writeFileSync(`${process.argv[4]}-danger-permissions.csv`, csvData);
+
+console.log(`Results written to ${process.argv[4]}-danger-permissions.csv`);
